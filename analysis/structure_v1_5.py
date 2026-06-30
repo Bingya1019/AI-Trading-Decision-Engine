@@ -1,6 +1,5 @@
 from data.kline_data import get_candles
 from data.indicators import add_indicators
-from analysis.swing import find_swings
 
 
 def make_structure_item(score, status, reason, risk=0, details=None):
@@ -15,76 +14,105 @@ def make_structure_item(score, status, reason, risk=0, details=None):
     }
 
 
-def classify_swings(swings):
+def find_swing_points(data, left=2, right=2):
+    swing_highs = []
+    swing_lows = []
+
+    for i in range(left, len(data) - right):
+        current_high = data.iloc[i]["high"]
+        current_low = data.iloc[i]["low"]
+
+        left_highs = data.iloc[i - left:i]["high"]
+        right_highs = data.iloc[i + 1:i + 1 + right]["high"]
+
+        left_lows = data.iloc[i - left:i]["low"]
+        right_lows = data.iloc[i + 1:i + 1 + right]["low"]
+
+        if current_high > left_highs.max() and current_high > right_highs.max():
+            swing_highs.append({
+                "index": i,
+                "time": data.iloc[i]["timestamp"],
+                "price": current_high,
+                "type": "high",
+            })
+
+        if current_low < left_lows.min() and current_low < right_lows.min():
+            swing_lows.append({
+                "index": i,
+                "time": data.iloc[i]["timestamp"],
+                "price": current_low,
+                "type": "low",
+            })
+
+    return swing_highs, swing_lows
+
+
+def classify_highs(swing_highs):
     classified = []
-    previous_high = None
-    previous_low = None
 
-    for swing in swings:
-        side = swing["side"]
+    for i, point in enumerate(swing_highs):
+        if i == 0:
+            label = "H"
+            meaning = "第一個高點，尚無法比較"
+            chinese = "初始高點"
+        else:
+            previous = swing_highs[i - 1]
 
-        if side == "high":
-            if previous_high is None:
-                label = "H"
-                chinese = "初始高點"
-                meaning = "第一個高點，尚無法比較"
-            elif swing["price"] > previous_high["price"]:
+            if point["price"] > previous["price"]:
                 label = "HH"
-                chinese = "高點創高"
                 meaning = "Higher High，更高的高點"
+                chinese = "高點創高"
             else:
                 label = "LH"
-                chinese = "高點降低"
                 meaning = "Lower High，更低的高點"
+                chinese = "高點降低"
 
-            point = {
-                **swing,
-                "label": label,
-                "type": label,
-                "chinese": chinese,
-                "meaning": meaning,
-            }
-
-            previous_high = point
-            classified.append(point)
-
-        elif side == "low":
-            if previous_low is None:
-                label = "L"
-                chinese = "初始低點"
-                meaning = "第一個低點，尚無法比較"
-            elif swing["price"] > previous_low["price"]:
-                label = "HL"
-                chinese = "低點墊高"
-                meaning = "Higher Low，更高的低點"
-            else:
-                label = "LL"
-                chinese = "低點跌破"
-                meaning = "Lower Low，更低的低點"
-
-            point = {
-                **swing,
-                "label": label,
-                "type": label,
-                "chinese": chinese,
-                "meaning": meaning,
-            }
-
-            previous_low = point
-            classified.append(point)
+        classified.append({
+            **point,
+            "label": label,
+            "meaning": meaning,
+            "chinese": chinese,
+        })
 
     return classified
 
 
-def get_current_structure(data, classified_swings):
+def classify_lows(swing_lows):
+    classified = []
+
+    for i, point in enumerate(swing_lows):
+        if i == 0:
+            label = "L"
+            meaning = "第一個低點，尚無法比較"
+            chinese = "初始低點"
+        else:
+            previous = swing_lows[i - 1]
+
+            if point["price"] > previous["price"]:
+                label = "HL"
+                meaning = "Higher Low，更高的低點"
+                chinese = "低點墊高"
+            else:
+                label = "LL"
+                meaning = "Lower Low，更低的低點"
+                chinese = "低點跌破"
+
+        classified.append({
+            **point,
+            "label": label,
+            "meaning": meaning,
+            "chinese": chinese,
+        })
+
+    return classified
+
+
+def get_current_structure(data, classified_highs, classified_lows):
     current = data.iloc[-1]
     current_price = current["close"]
 
-    highs = [item for item in classified_swings if item["side"] == "high"]
-    lows = [item for item in classified_swings if item["side"] == "low"]
-
-    last_high = highs[-1] if highs else None
-    last_low = lows[-1] if lows else None
+    last_high = classified_highs[-1] if classified_highs else None
+    last_low = classified_lows[-1] if classified_lows else None
 
     distance_to_high = None
     distance_to_low = None
@@ -136,18 +164,9 @@ def get_current_structure(data, classified_swings):
 
 
 def analyze_structure(data):
-    swings = find_swings(data)
-    classified_swings = classify_swings(swings)
-
-    classified_highs = [
-        item for item in classified_swings
-        if item["side"] == "high"
-    ]
-
-    classified_lows = [
-        item for item in classified_swings
-        if item["side"] == "low"
-    ]
+    swing_highs, swing_lows = find_swing_points(data)
+    classified_highs = classify_highs(swing_highs)
+    classified_lows = classify_lows(swing_lows)
 
     recent_highs = classified_highs[-3:]
     recent_lows = classified_lows[-3:]
@@ -162,12 +181,11 @@ def analyze_structure(data):
 
     current_structure = get_current_structure(
         data=data,
-        classified_swings=classified_swings,
+        classified_highs=classified_highs,
+        classified_lows=classified_lows,
     )
 
     details = {
-        "swings": swings,
-        "classified_swings": classified_swings,
         "recent_highs": recent_highs,
         "recent_lows": recent_lows,
         "high_labels": high_labels,
@@ -236,7 +254,7 @@ def analyze_structure(data):
     return make_structure_item(
         score=0,
         status="結構不明",
-        reason="目前 Swing 尚未形成明確 HH、HL、LH、LL 結構。",
+        reason="目前 Swing High / Swing Low 尚未形成明確 HH、HL、LH、LL 結構。",
         risk=1,
         details=details,
     )
@@ -308,19 +326,14 @@ def print_current_structure(current_structure):
 
 
 if __name__ == "__main__":
-    candles = get_candles(
-        symbol="BTC-USDT-SWAP",
-        bar="15m",
-        limit=150,
-    )
-
+    candles = get_candles(symbol="BTC-USDT-SWAP", bar="15m", limit=150)
     candles = candles[candles["confirm"] == "1"].copy()
-    data = add_indicators(candles)
 
+    data = add_indicators(candles)
     result = analyze_structure(data)
 
     print("\n" + "=" * 72)
-    print("BTC 永續合約｜15 分鐘市場結構分析 V2")
+    print("BTC 永續合約｜15 分鐘市場結構分析 V1.5")
     print("=" * 72)
     print(f"分類：{result['category']}")
     print(f"項目：{result['name']}")
