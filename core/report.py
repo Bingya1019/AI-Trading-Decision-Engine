@@ -26,6 +26,28 @@ def format_smc_rule(rule):
     )
 
 
+def format_state_step(step):
+    mark = "✓" if step["completed"] else "□"
+
+    return (
+        f"{mark} Step {step['step']}｜"
+        f"{step['name']}｜"
+        f"{step['description']}"
+    )
+
+
+def format_zone(name, zone):
+    if zone is None:
+        return f"{name}：無有效區域"
+
+    return (
+        f"{name}："
+        f"{zone['low']:,.2f}～"
+        f"{zone['high']:,.2f}｜"
+        f"中間價 {zone['midpoint']:,.2f}"
+    )
+
+
 def generate_brain_report(
     symbol="BTC-USDT-SWAP",
     bar="15m",
@@ -41,14 +63,18 @@ def generate_brain_report(
     )
 
     smc = result["smc"]
+    state_result = result["smc_state"]
+    primary_state = state_result["primary"]
 
     lines = []
 
     lines.append("=" * 72)
+
     lines.append(
         f"{coin} 永續合約｜"
-        f"{result['bar']} Smart Money Brain V4.0"
+        f"{result['bar']} Smart Money Brain V4.1"
     )
+
     lines.append("=" * 72)
 
     lines.append(
@@ -70,7 +96,8 @@ def generate_brain_report(
 
     lines.append(
         f"傳統分數方向：{result['score_direction']}｜"
-        f"SMC 方向：{smc['direction']}"
+        f"SMC 方向：{smc['direction']}｜"
+        f"流程方向：{primary_state['direction_text']}"
     )
 
     lines.append(
@@ -83,7 +110,7 @@ def generate_brain_report(
     )
 
     lines.append(
-        f"傳統總分："
+        "傳統總分："
         f"{format_score(result['total_score'])}"
     )
 
@@ -101,7 +128,7 @@ def generate_brain_report(
     )
 
     lines.append(
-        f"SMC 淨點數："
+        "SMC 淨點數："
         f"{format_score(smc['net_points'])}"
     )
 
@@ -127,7 +154,75 @@ def generate_brain_report(
         lines.append("【結構警告】")
 
         for warning in smc["warnings"]:
-            lines.append(f"・{warning}")
+            lines.append(
+                f"・{warning}"
+            )
+
+    lines.append("-" * 72)
+    lines.append("【SMC 流程狀態】")
+
+    lines.append(
+        f"主流程：{primary_state['direction_text']}｜"
+        f"完成度："
+        f"{primary_state['completed_count']}/"
+        f"{primary_state['total_steps']}｜"
+        f"{primary_state['progress'] * 100:.0f}%"
+    )
+
+    if primary_state["direction"] == "neutral":
+        lines.append(
+            "・目前多空流程完成度相近，尚無明確主流程。"
+        )
+    else:
+        for step in primary_state["steps"]:
+            lines.append(
+                format_state_step(step)
+            )
+
+    lines.append("")
+    lines.append(
+        "流程建議："
+        f"{state_result['action']}"
+    )
+
+    lines.append("-" * 72)
+    lines.append("【多空流程比較】")
+
+    bullish_state = state_result["bullish"]
+    bearish_state = state_result["bearish"]
+
+    lines.append(
+        "多方流程："
+        f"{bullish_state['completed_count']}/"
+        f"{bullish_state['total_steps']}｜"
+        f"{bullish_state['progress'] * 100:.0f}%"
+    )
+
+    lines.append(
+        "空方流程："
+        f"{bearish_state['completed_count']}/"
+        f"{bearish_state['total_steps']}｜"
+        f"{bearish_state['progress'] * 100:.0f}%"
+    )
+
+    lines.append("-" * 72)
+    lines.append("【主流程區域】")
+
+    zones = primary_state["zones"]
+
+    lines.append(
+        format_zone(
+            "Order Block",
+            zones.get("order_block"),
+        )
+    )
+
+    lines.append(
+        format_zone(
+            "Fair Value Gap",
+            zones.get("fvg"),
+        )
+    )
 
     lines.append("-" * 72)
     lines.append("【模組方向】")
