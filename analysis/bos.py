@@ -3,31 +3,29 @@ from data.indicators import add_indicators
 from analysis.swing import find_swings
 from analysis.structure import classify_swings
 from analysis.trend_state import analyze_trend_state
+from analysis.event_utils import (
+    make_event_item,
+    find_last_label,
+    calculate_recent_event_score,
+    find_recent_event,
+    format_recent_event,
+    copy_event_to_details,
+)
 
 
 def make_bos_item(score, status, reason, risk=0, details=None):
-    return {
-        "name": "BOS",
-        "category": "市場結構突破",
-        "score": score,
-        "status": status,
-        "reason": reason,
-        "risk": risk,
-        "details": details or {},
-    }
-
-
-def find_last_label(classified_swings, label):
     """
-    從已分類 Swing 中尋找最近一個指定結構，例如 HH 或 LL。
+    建立 BOS 統一分析結果。
     """
-    matches = [
-        item
-        for item in classified_swings
-        if item["label"] == label
-    ]
-
-    return matches[-1] if matches else None
+    return make_event_item(
+        name="BOS",
+        category="市場結構突破",
+        score=score,
+        status=status,
+        reason=reason,
+        risk=risk,
+        details=details,
+    )
 
 
 def build_structure_snapshot(data):
@@ -56,26 +54,27 @@ def detect_bos_at_latest_bar(data):
     """
     判斷最新一根 K 棒是否剛發生 BOS。
 
-    多頭 BOS：
-    - 趨勢為 bull
-    - 前一收盤價未突破最近 HH
-    - 最新收盤價由下往上突破最近 HH
+    BOS Up：
+    1. 趨勢為 bull
+    2. 前一收盤尚未突破最近 HH
+    3. 最新收盤由下往上突破最近 HH
 
-    空頭 BOS：
-    - 趨勢為 bear
-    - 前一收盤價未跌破最近 LL
-    - 最新收盤價由上往下跌破最近 LL
+    BOS Down：
+    1. 趨勢為 bear
+    2. 前一收盤尚未跌破最近 LL
+    3. 最新收盤由上往下跌破最近 LL
     """
     if len(data) < 2:
         return None
 
     snapshot = build_structure_snapshot(data)
 
-    current = data.iloc[-1]
     previous = data.iloc[-2]
+    current = data.iloc[-1]
 
-    current_close = current["close"]
     previous_close = previous["close"]
+    current_close = current["close"]
+
     trend = snapshot["trend"]
     last_hh = snapshot["last_hh"]
     last_ll = snapshot["last_ll"]
@@ -85,6 +84,7 @@ def detect_bos_at_latest_bar(data):
 
         if previous_close <= hh_price < current_close:
             return {
+                "event_type": "BOS",
                 "direction": "up",
                 "status": "BOS Up",
                 "score": 3,
@@ -101,6 +101,7 @@ def detect_bos_at_latest_bar(data):
 
         if previous_close >= ll_price > current_close:
             return {
+                "event_type": "BOS",
                 "direction": "down",
                 "status": "BOS Down",
                 "score": -3,
@@ -117,71 +118,17 @@ def detect_bos_at_latest_bar(data):
 
 def find_recent_bos_event(data, lookback=80):
     """
-    往回掃描最近的 BOS 事件。
+    往回搜尋最近一次 BOS。
 
-    同一個 HH 或 LL 被多次穿越時，只記錄第一次有效突破，
-    避免同一結構價位重複計算 BOS。
+    掃描、事件去重與 bars_ago，
+    統一交由 event_utils.find_recent_event 處理。
     """
-    if len(data) < 4:
-        return None
-
-    start_index = max(3, len(data) - lookback)
-    used_structure_points = set()
-    events = []
-
-    for end_index in range(start_index, len(data)):
-        history = data.iloc[: end_index + 1].copy()
-        event = detect_bos_at_latest_bar(history)
-
-        if event is None:
-            continue
-
-        structure_point = event["structure_point"]
-
-        structure_key = (
-            event["direction"],
-            structure_point["index"],
-            round(float(structure_point["price"]), 8),
-        )
-
-        if structure_key in used_structure_points:
-            continue
-
-        used_structure_points.add(structure_key)
-
-        event["bars_ago"] = len(data) - 1 - end_index
-        events.append(event)
-
-    return events[-1] if events else None
-
-
-def calculate_recent_event_score(event):
-    """
-    最近 BOS 對目前評分的影響採時間衰減：
-
-    0 根前：完整 ±3
-    1～4 根前：±2
-    5～8 根前：±1
-    超過 8 根：0
-
-    避免很久以前的 BOS 永久影響現在的總分。
-    """
-    if event is None:
-        return 0
-
-    bars_ago = event["bars_ago"]
-    direction = event["direction"]
-
-    if bars_ago == 0:
-        strength = 3
-    elif bars_ago <= 4:
-        strength = 2
-    elif bars_ago <= 8:
-        strength = 1
-    else:
-        strength = 0
-
-    return strength if direction == "up" else -strength
+    return find_recent_event(
+        data=data,
+        detector=detect_bos_at_latest_bar,
+        lookback=lookback,
+        minimum_bars=4,
+    )
 
 
 def analyze_bos(data, lookback=80):
@@ -204,14 +151,17 @@ def analyze_bos(data, lookback=80):
 
     snapshot = build_structure_snapshot(data)
 
-    current = data.iloc[-1]
     previous = data.iloc[-2]
+    current = data.iloc[-1]
 
-    current_close = current["close"]
     previous_close = previous["close"]
+    current_close = current["close"]
 
     current_event = detect_bos_at_latest_bar(data)
-    recent_event = find_recent_bos_event(data, lookback=lookback)
+    recent_event = find_recent_bos_event(
+        data=data,
+        lookback=lookback,
+    )
 
     details = {
         "trend": snapshot["trend"],
@@ -229,11 +179,11 @@ def analyze_bos(data, lookback=80):
     }
 
     if current_event is not None:
-        details["break_level"] = current_event["break_level"]
-        details["break_close"] = current_event["break_close"]
-        details["break_time"] = current_event["break_time"]
-        details["bars_ago"] = 0
-        details["direction"] = current_event["direction"]
+        current_event = current_event.copy()
+        current_event["bars_ago"] = 0
+
+        details["current_event"] = current_event
+        copy_event_to_details(details, current_event)
 
         if current_event["direction"] == "up":
             reason = (
@@ -258,12 +208,7 @@ def analyze_bos(data, lookback=80):
 
     if recent_event is not None:
         recent_score = calculate_recent_event_score(recent_event)
-
-        details["break_level"] = recent_event["break_level"]
-        details["break_close"] = recent_event["break_close"]
-        details["break_time"] = recent_event["break_time"]
-        details["bars_ago"] = recent_event["bars_ago"]
-        details["direction"] = recent_event["direction"]
+        copy_event_to_details(details, recent_event)
 
         direction_text = (
             "多頭結構突破"
@@ -343,19 +288,6 @@ def format_structure_point(point):
     )
 
 
-def format_recent_event(event):
-    if event is None:
-        return "無資料"
-
-    return (
-        f"{event['status']}｜"
-        f"時間 {event['break_time'].strftime('%m/%d %H:%M')}｜"
-        f"突破價位 {event['break_level']:,.2f}｜"
-        f"突破收盤 {event['break_close']:,.2f}｜"
-        f"距今 {event['bars_ago']} 根 K 棒"
-    )
-
-
 if __name__ == "__main__":
     candles = get_candles(
         symbol="BTC-USDT-SWAP",
@@ -370,14 +302,17 @@ if __name__ == "__main__":
     details = result["details"]
 
     print("\n" + "=" * 72)
-    print("BTC 永續合約｜15 分鐘 BOS 分析 V2")
+    print("BTC 永續合約｜15 分鐘 BOS 分析 V2｜Event Framework")
     print("=" * 72)
     print(f"目前趨勢：{details.get('trend', '未知')}")
     print(f"前一收盤：{details.get('previous_close', 0):,.2f}")
     print(f"最新收盤：{details.get('current_close', 0):,.2f}")
     print(f"最近 HH：{format_structure_point(details.get('last_hh'))}")
     print(f"最近 LL：{format_structure_point(details.get('last_ll'))}")
-    print(f"最近事件：{format_recent_event(details.get('recent_event'))}")
+    print(
+        "最近事件："
+        f"{format_recent_event(details.get('recent_event'))}"
+    )
     print("-" * 72)
     print(f"狀態：{result['status']}")
     print(f"分數：{result['score']:+d}")

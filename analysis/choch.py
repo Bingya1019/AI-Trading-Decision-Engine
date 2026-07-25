@@ -4,30 +4,27 @@ from analysis.swing import find_swings
 from analysis.structure import classify_swings
 from analysis.trend_state import analyze_trend_state
 
+from analysis.event_utils import (
+    make_event_item,
+    find_last_label,
+    calculate_recent_event_score,
+    find_recent_event,
+    format_recent_event,
+    copy_event_to_details,
+)
+
 
 def make_choch_item(score, status, reason, risk=0, details=None):
-    return {
-        "name": "CHOCH",
-        "category": "市場結構反轉",
-        "score": score,
-        "status": status,
-        "reason": reason,
-        "risk": risk,
-        "details": details or {},
-    }
+    return make_event_item(
+        name="CHOCH",
+        category="市場結構反轉",
+        score=score,
+        status=status,
+        reason=reason,
+        risk=risk,
+        details=details,
+    )
 
-
-def find_last_label(classified_swings, label):
-    """
-    尋找最近一個指定結構點，例如 HL 或 LH。
-    """
-    matches = [
-        item
-        for item in classified_swings
-        if item["label"] == label
-    ]
-
-    return matches[-1] if matches else None
 
 
 def build_previous_structure(data):
@@ -130,76 +127,21 @@ def detect_choch_at_latest_bar(data):
 
 def find_recent_choch_event(data, lookback=80):
     """
-    往回掃描最近的 CHOCH 事件。
+    往回搜尋最近一次 CHOCH。
 
-    同一個 HL 或 LH 被重複穿越時，只記錄第一次有效事件，
-    避免同一個結構點重複計算 CHOCH。
+    掃描、事件去重與 bars_ago，
+    統一交由 event_utils.find_recent_event 處理。
     """
-    if len(data) < 10:
-        return None
-
-    start_index = max(9, len(data) - lookback)
-    used_structure_points = set()
-    events = []
-
-    for end_index in range(start_index, len(data)):
-        history = data.iloc[: end_index + 1].copy()
-        event = detect_choch_at_latest_bar(history)
-
-        if event is None:
-            continue
-
-        structure_point = event["structure_point"]
-
-        structure_key = (
-            event["direction"],
-            structure_point["index"],
-            round(float(structure_point["price"]), 8),
-        )
-
-        if structure_key in used_structure_points:
-            continue
-
-        used_structure_points.add(structure_key)
-
-        event["bars_ago"] = len(data) - 1 - end_index
-        events.append(event)
-
-    return events[-1] if events else None
-
-
-def calculate_recent_event_score(event):
-    """
-    最近 CHOCH 對目前總分採時間衰減：
-
-    0 根前：完整 ±3
-    1～4 根前：±2
-    5～8 根前：±1
-    超過 8 根：0
-
-    CHOCH 是反轉警訊，風險仍會另外保留。
-    """
-    if event is None:
-        return 0
-
-    bars_ago = event["bars_ago"]
-    direction = event["direction"]
-
-    if bars_ago == 0:
-        strength = 3
-    elif bars_ago <= 4:
-        strength = 2
-    elif bars_ago <= 8:
-        strength = 1
-    else:
-        strength = 0
-
-    return strength if direction == "up" else -strength
-
+    return find_recent_event(
+        data=data,
+        detector=detect_choch_at_latest_bar,
+        lookback=lookback,
+        minimum_bars=10,
+    )
 
 def analyze_choch(data, lookback=80):
     """
-    CHOCH V2：
+    CHOCH V2｜Event Framework：
 
     1. 判斷最新 K 棒是否正在發生 CHOCH。
     2. 若最新 K 棒沒有 CHOCH，追蹤最近一次 CHOCH。
@@ -240,16 +182,18 @@ def analyze_choch(data, lookback=80):
         "event_time": None,
         "break_level": None,
         "break_close": None,
+        "break_time": None,
         "bars_ago": None,
         "direction": None,
     }
 
     if current_event is not None:
+        current_event = current_event.copy()
+        current_event["bars_ago"] = 0
+
+        details["current_event"] = current_event
+        copy_event_to_details(details, current_event)
         details["event_time"] = current_event["break_time"]
-        details["break_level"] = current_event["break_level"]
-        details["break_close"] = current_event["break_close"]
-        details["bars_ago"] = 0
-        details["direction"] = current_event["direction"]
 
         if current_event["direction"] == "up":
             reason = (
@@ -277,11 +221,8 @@ def analyze_choch(data, lookback=80):
     if recent_event is not None:
         recent_score = calculate_recent_event_score(recent_event)
 
+        copy_event_to_details(details, recent_event)
         details["event_time"] = recent_event["break_time"]
-        details["break_level"] = recent_event["break_level"]
-        details["break_close"] = recent_event["break_close"]
-        details["bars_ago"] = recent_event["bars_ago"]
-        details["direction"] = recent_event["direction"]
 
         if recent_event["direction"] == "up":
             direction_text = "由空轉多的結構反轉"
@@ -348,7 +289,6 @@ def analyze_choch(data, lookback=80):
         details=details,
     )
 
-
 def format_structure_point(point):
     if point is None:
         return "無資料"
@@ -358,20 +298,6 @@ def format_structure_point(point):
         f"{point['price']:,.2f}｜"
         f"{point['time'].strftime('%m/%d %H:%M')}"
     )
-
-
-def format_recent_event(event):
-    if event is None:
-        return "無資料"
-
-    return (
-        f"{event['status']}｜"
-        f"時間 {event['break_time'].strftime('%m/%d %H:%M')}｜"
-        f"突破價位 {event['break_level']:,.2f}｜"
-        f"突破收盤 {event['break_close']:,.2f}｜"
-        f"距今 {event['bars_ago']} 根 K 棒"
-    )
-
 
 if __name__ == "__main__":
     candles = get_candles(
