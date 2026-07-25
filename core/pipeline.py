@@ -6,6 +6,7 @@ from analysis.volume import analyze_volume
 from analysis.structure import analyze_structure
 from analysis.bos import analyze_bos
 from analysis.choch import analyze_choch
+from analysis.liquidity import analyze_liquidity
 
 
 def run_pipeline(data):
@@ -36,6 +37,7 @@ def run_pipeline(data):
         analyze_structure(data),
         analyze_bos(data),
         analyze_choch(data),
+        analyze_liquidity(data),
     ]
 
     return score_items
