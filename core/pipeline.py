@@ -7,12 +7,37 @@ from analysis.structure import analyze_structure
 from analysis.bos import analyze_bos
 from analysis.choch import analyze_choch
 from analysis.liquidity import analyze_liquidity
+from analysis.order_block import analyze_order_block
+from analysis.fvg import analyze_fvg
 
 
 def run_pipeline(data):
+    """
+    執行完整交易分析 Pipeline。
+
+    分析順序：
+    1. 趨勢
+    2. 動能
+    3. 市場情緒
+    4. 波動率
+    5. 成交量
+    6. 市場結構
+    7. BOS
+    8. CHOCH
+    9. Liquidity Sweep
+    10. Order Block
+    11. Fair Value Gap
+    """
+
+    if data is None or len(data) < 3:
+        raise ValueError(
+            "Pipeline 至少需要 3 根 K 棒資料。"
+        )
+
     current = data.iloc[-1]
     previous = data.iloc[-2]
-    price = current["close"]
+
+    price = float(current["close"])
 
     score_items = [
         analyze_trend(
@@ -38,6 +63,8 @@ def run_pipeline(data):
         analyze_bos(data),
         analyze_choch(data),
         analyze_liquidity(data),
+        analyze_order_block(data),
+        analyze_fvg(data),
     ]
 
     return score_items
